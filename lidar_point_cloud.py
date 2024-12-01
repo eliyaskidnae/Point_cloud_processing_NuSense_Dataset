@@ -11,21 +11,18 @@ import matplotlib.pyplot as plt
 class Lidar_Processing:
     def __init__(self):
         self.nusc = NuScenes(version="v1.0-mini", dataroot="v1.0-mini", verbose=True)
-        self.scene = self.nusc.scene[1]
+        self.scene = self.nusc.scene[7]
         self.first_sample = self.nusc.get("sample", self.scene["first_sample_token"])
         self.current_sample = self.first_sample
         self.aggregated_pcd = o3d.geometry.PointCloud()
-        self.prev_pcd = None
-        self.dynamic_pcd = o3d.geometry.PointCloud()
-        self.static_pcd = o3d.geometry.PointCloud()
         self.initial_pose = np.array([0, 0, 0])
         self.trajectory_points = []
         self.moving_objects = o3d.geometry.PointCloud()
-        self.voxel_size = 1
 
     def transformation_matrix(self, transformation_data):
         T = np.eye(4)
         q = Quaternion(transformation_data["rotation"])
+        lidar_to_base = np.eye(4)
         T[:3, :3] = q.rotation_matrix
         T[:3, 3] = transformation_data["translation"]
 
@@ -39,15 +36,15 @@ class Lidar_Processing:
         object_positions = np.array(
             [
                 ego_pose["translation"]
-                + radius * np.array([np.cos(angle), np.sin(angle), 100])
+                + radius * np.array([np.cos(angle), np.sin(angle), 1000])
                 for angle in angles
             ]
         )
         return object_positions
 
     def cloud_aggregation(self):
-        # vis = o3d.visualization.Visualizer()
-        # vis.create_window()
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
         while self.current_sample:
             lidar_token = self.current_sample["data"]["LIDAR_TOP"]
             lidar_data = self.nusc.get("sample_data", lidar_token)
@@ -68,71 +65,34 @@ class Lidar_Processing:
             self.pointcloud.transform(base_to_global)
             # Add points to aggregated point cloud
             pcd = o3d.geometry.PointCloud()
-            dynamic_pcd = o3d.geometry.PointCloud()
             pcd.points = o3d.utility.Vector3dVector(self.pointcloud.points.T[:, :3])
-            pcd = pcd.voxel_down_sample(voxel_size=self.voxel_size)
-            if self.prev_pcd is not None:
-                points1 = np.asarray(self.prev_pcd.points)
-                points2 = np.asarray(pcd.points)
-                p1_voxels = set(
-                    map(tuple, np.floor(points1 / self.voxel_size).astype(int))
-                )
-                p2_voxels = set(
-                    map(tuple, np.floor(points2 / self.voxel_size).astype(int))
-                )
-                static_voxels = p1_voxels & p2_voxels
-                dynamic_voxels = p1_voxels ^ p2_voxels
-                static_points = np.array(
-                    [
-                        p
-                        for p in points1
-                        if tuple(np.floor(p / self.voxel_size).astype(int))
-                        in static_voxels
-                    ]
-                )
-                dynamic_points = np.array(
-                    [
-                        p
-                        for p in points1
-                        if tuple(np.floor(p / self.voxel_size).astype(int))
-                        in dynamic_voxels
-                    ]
-                )
-                print("static points", len(static_points))
-                print("dynamic points", len(dynamic_points))
-                # Update the point cloud with static points only
-                self.static_pcd.points = o3d.utility.Vector3dVector(static_points)
-                dynamic_pcd.points = o3d.utility.Vector3dVector(dynamic_points)
-
-            self.aggregated_pcd += self.static_pcd
-            self.dynamic_pcd += dynamic_pcd
-            self.prev_pcd = pcd
-            # self.trajectory_points.append(ego_pose["translation"])
+            self.aggregated_pcd += pcd
+            self.trajectory_points.append(ego_pose["translation"])
 
             # Simulate moving objects
-            # moving_object_positions = self.simulate_moving_objects(ego_pose)
-            # self.moving_objects.points = o3d.utility.Vector3dVector(
-            #     moving_object_positions
-            # )
+            moving_object_positions = self.simulate_moving_objects(ego_pose)
+            self.moving_objects.points = o3d.utility.Vector3dVector(
+                moving_object_positions
+            )
 
             # update window
             # Create a line set for the trajectory
-            # if len(self.trajectory_points) > 1:
-            #     lines = [[i, i + 1] for i in range(len(self.trajectory_points) - 1)]
-            #     trajectory_line_set = o3d.geometry.LineSet()
-            #     trajectory_line_set.points = o3d.utility.Vector3dVector(
-            #         self.trajectory_points
-            #     )
-            #     trajectory_line_set.lines = o3d.utility.Vector2iVector(lines)
+            if len(self.trajectory_points) > 1:
+                lines = [[i, i + 1] for i in range(len(self.trajectory_points) - 1)]
+                trajectory_line_set = o3d.geometry.LineSet()
+                trajectory_line_set.points = o3d.utility.Vector3dVector(
+                    self.trajectory_points
+                )
+                trajectory_line_set.lines = o3d.utility.Vector2iVector(lines)
 
-            #     # Update the visualizer
-            #     vis.clear_geometries()
-            #     vis.add_geometry(self.aggregated_pcd)
-            #     vis.add_geometry(self.moving_objects)
-            #     # vis.add_geometry(trajectory_line_set)
-            #     vis.poll_events()
-            #     vis.update_renderer()
-            # time.sleep(0.1)
+                # Update the visualizer
+                vis.clear_geometries()
+                vis.add_geometry(self.aggregated_pcd)
+                vis.add_geometry(self.moving_objects)
+                # vis.add_geometry(trajectory_line_set)
+                vis.poll_events()
+                vis.update_renderer()
+            time.sleep(0.1)
             # Move to next sample
             self.current_sample = (
                 self.nusc.get("sample", self.current_sample["next"])
@@ -140,8 +100,8 @@ class Lidar_Processing:
                 else None
             )
 
-        # vis.destroy_window()
-        o3d.visualization.draw_geometries([self.dynamic_pcd])
+        vis.destroy_window()
+
         o3d.io.write_point_cloud("aggregated_map.ply", self.aggregated_pcd)
 
         return self.aggregated_pcd
@@ -157,4 +117,4 @@ if __name__ == "__main__":
     process = Lidar_Processing()
     aggregated_cloud = process.cloud_aggregation()
     o3d.visualization.draw_geometries([aggregated_cloud])
-    # process.plot_trajectory()
+    process.plot_trajectory()
