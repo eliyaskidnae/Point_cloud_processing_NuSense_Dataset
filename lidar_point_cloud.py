@@ -48,6 +48,7 @@ class Lidar_Processing:
         while self.current_sample:
             lidar_token = self.current_sample["data"]["LIDAR_TOP"]
             lidar_data = self.nusc.get("sample_data", lidar_token)
+            
             ego_pose = self.nusc.get("ego_pose", lidar_data["ego_pose_token"])
             calibrated_sensor = self.nusc.get(
                 "calibrated_sensor", lidar_data["calibrated_sensor_token"]
