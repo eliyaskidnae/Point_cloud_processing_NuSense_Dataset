@@ -33,6 +33,7 @@ class Lidar_Processing:
         self.annotations = np.array([])
 
     def get_velocity(self, ann):
+        """Get velocity of the object"""
         if "velocity" in ann:
             return np.linalg.norm(ann["velocity"], ord=2)
         elif ann["prev"]:
@@ -56,23 +57,19 @@ class Lidar_Processing:
             return 0.0
 
     def detect_moving_objects(self, v_t=0.25):
+        """Detect moving objects in the aggregated point cloud"""
         agg_pc = np.array(self.aggregated_pcd.points)
         # Masks for moving and static points
         moving_mask = np.zeros(agg_pc.shape[0], dtype=bool)
         static_mask = np.ones(agg_pc.shape[0], dtype=bool)
-        print("annotations", self.annotations.shape)
         for ann in self.annotations:
             # Get velocity
             velocity = self.get_velocity(ann)
-            # print("Vlocity", velocity)
-            # print("ann", ann)
-            # print(velocity)
             is_moving = velocity >= v_t
             # Bounding box for object
             box = Box(ann["translation"], ann["size"], Quaternion(ann["rotation"]))
             # Get inside box points
             points_inside_box = points_in_box(box, agg_pc.T)
-            print("Points inside box", points_inside_box.sum(), is_moving)
             if is_moving and points_inside_box.sum() >= 30:
                 moving_mask[points_inside_box] = True
             else:
@@ -110,6 +107,7 @@ class Lidar_Processing:
         return object_positions
 
     def camera_setup(self, camera_data, base_to_global):
+        """Get camera extrinsic and intrinsic parameters"""
         camera_calibration = self.nusc.get(
             "calibrated_sensor", camera_data["calibrated_sensor_token"]
         )
@@ -121,7 +119,7 @@ class Lidar_Processing:
         return camera_extrinsic, camera_intrinsic
 
     def project_point_to_image(self, points, camera_extrinsic, camera_intrinsic):
-
+        """Project 3D points to 2D image plane"""
         points = np.vstack([points[:3, :], np.ones(points.shape[1])])
         camera_coordinate = np.dot(camera_extrinsic, points)
         depth = camera_coordinate[2, :]
@@ -131,6 +129,7 @@ class Lidar_Processing:
         return pixel_coordinate, depth
 
     def draw_point_cloud_toimage(self, point_cloud_2d):
+
         self.camera_image = np.array(self.camera_image)
         for point in point_cloud_2d.T:
             x, y = int(point[0]), int(point[1])
@@ -140,10 +139,8 @@ class Lidar_Processing:
 
         img = Image.fromarray(self.camera_image)
 
-        # img.show()
-
     def colored_pointcloud(self, pointcloud, base_to_global, outfile=None):
-
+        """Color the point cloud based on the camera images"""
         MAX_DEPTH = 9000
         DEPTH_THRESHOLD = 0.1
         pointcloud_data = np.array(pointcloud.points)
@@ -223,6 +220,7 @@ class Lidar_Processing:
         return self.pointcloud, ego_pose, calibrated_sensor
 
     def get_annotations(self):
+        """Get annotations for the current sample"""
         for ann_token in self.current_sample["anns"]:
             ann = self.nusc.get("sample_annotation", ann_token)
             self.annotations = np.append(self.annotations, ann)
@@ -230,8 +228,7 @@ class Lidar_Processing:
         return self.annotations
 
     def cloud_aggregation(self):
-        # vis = o3d.visualization.Visualizer()
-        # vis.create_window()
+        """Aggregate point clouds from multiple samples"""
         index = 0
         while self.current_sample:
             # Load lidar point cloud
@@ -244,11 +241,14 @@ class Lidar_Processing:
             base_to_global = self.transformation_matrix(ego_pose)
             self.pointcloud.transform(lidar_to_base)
             self.pointcloud.transform(base_to_global)
-            color_value = self.colored_pointcloud(self.pointcloud, base_to_global)
+            self.color_value = self.colored_pointcloud(self.pointcloud, base_to_global)
+
+            # print(self.color_value)
             # Add points to aggregated point cloud
             pcd = o3d.geometry.PointCloud()
             pcd.points = o3d.utility.Vector3dVector(self.pointcloud.points.T[:, :3])
-            pcd.colors = o3d.utility.Vector3dVector(color_value)
+            pcd.colors = o3d.utility.Vector3dVector(self.color_value)
+
             self.aggregated_pcd += pcd
             self.trajectory_points.append(ego_pose["translation"])
             self.current_sample = (
@@ -258,11 +258,7 @@ class Lidar_Processing:
             )
             index += 1
 
-            if index == 17:
-                break
-
-        o3d.io.write_point_cloud("aggregated_map_color.ply", self.aggregated_pcd)
-        return self.aggregated_pcd
+        return self.aggregated_pcd, self.color_value
 
     def plot_trajectory(self):
         trajectory_points = np.array(self.trajectory_points)
@@ -270,19 +266,30 @@ class Lidar_Processing:
         plt.plot(trajectory_points[:, 0], trajectory_points[:, 1])
         plt.show()
 
-    def visualize(self):
-        print(len(self.static_points.points), len(self.aggregated_pcd.points))
-        print("Visualizing...", len(self.moving_points.points))
-
+    def visualize_filtred_pointcloud(
+        self,
+    ):
         self.moving_points.paint_uniform_color([1, 0, 0])
         self.static_points.paint_uniform_color([0, 1, 0])
         all_points = self.moving_points + self.static_points
         o3d.visualization.draw_geometries([all_points])
 
+    def visualize_pointcloud(self):
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(self.aggregated_pcd.points)
+        o3d.io.write_point_cloud("aggregated_map.ply", pcd)
+        o3d.visualization.draw_geometries([pcd])
+
+    def visulized_clored_pointcloud(self):
+        o3d.io.write_point_cloud("aggregated_map_color.ply", self.aggregated_pcd)
+        o3d.visualization.draw_geometries([self.aggregated_pcd])
+
 
 if __name__ == "__main__":
     process = Lidar_Processing()
-    aggregated_cloud = process.cloud_aggregation()
-    o3d.visualization.draw_geometries([aggregated_cloud])
+    aggregated_cloud, color = process.cloud_aggregation()
+    process.visualize_pointcloud()
+    process.visulized_clored_pointcloud()
     static_points, moving_points = process.detect_moving_objects()
-    process.visualize()
+    process.visualize_filtred_pointcloud()
