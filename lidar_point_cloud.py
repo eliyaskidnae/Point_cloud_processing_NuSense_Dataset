@@ -16,6 +16,7 @@ class Lidar_Processing:
         self.first_sample = self.nusc.get("sample", self.scene["first_sample_token"])
         self.current_sample = self.first_sample
         self.aggregated_pcd = o3d.geometry.PointCloud()
+        self.color_value = np.zeros((0, 3))
         self.moving_points = o3d.geometry.PointCloud()
         self.static_points = o3d.geometry.PointCloud()
         self.initial_pose = np.array([0, 0, 0])
@@ -59,6 +60,7 @@ class Lidar_Processing:
     def detect_moving_objects(self, v_t=0.25):
         """Detect moving objects in the aggregated point cloud"""
         agg_pc = np.array(self.aggregated_pcd.points)
+        agg_color = np.array(self.aggregated_pcd.colors)
         # Masks for moving and static points
         moving_mask = np.zeros(agg_pc.shape[0], dtype=bool)
         static_mask = np.ones(agg_pc.shape[0], dtype=bool)
@@ -76,9 +78,13 @@ class Lidar_Processing:
                 static_mask[points_inside_box] = False
 
         moving_points = agg_pc[moving_mask]
+        moving_colorvalue = agg_color[moving_mask]
         static_points = agg_pc[static_mask]
+        static_colorvalue = agg_color[static_mask]
         self.moving_points.points = o3d.utility.Vector3dVector(moving_points)
+        self.moving_points.colors = o3d.utility.Vector3dVector(moving_colorvalue)
         self.static_points.points = o3d.utility.Vector3dVector(static_points)
+        self.static_points.colors = o3d.utility.Vector3dVector(static_colorvalue)
 
         return self.static_points, self.moving_points
 
@@ -241,13 +247,14 @@ class Lidar_Processing:
             base_to_global = self.transformation_matrix(ego_pose)
             self.pointcloud.transform(lidar_to_base)
             self.pointcloud.transform(base_to_global)
-            self.color_value = self.colored_pointcloud(self.pointcloud, base_to_global)
+            color_value = self.colored_pointcloud(self.pointcloud, base_to_global)
+            self.color_value = np.vstack([self.color_value, color_value])
 
             # print(self.color_value)
             # Add points to aggregated point cloud
             pcd = o3d.geometry.PointCloud()
             pcd.points = o3d.utility.Vector3dVector(self.pointcloud.points.T[:, :3])
-            pcd.colors = o3d.utility.Vector3dVector(self.color_value)
+            pcd.colors = o3d.utility.Vector3dVector(color_value)
 
             self.aggregated_pcd += pcd
             self.trajectory_points.append(ego_pose["translation"])
@@ -285,11 +292,25 @@ class Lidar_Processing:
         o3d.io.write_point_cloud("aggregated_map_color.ply", self.aggregated_pcd)
         o3d.visualization.draw_geometries([self.aggregated_pcd])
 
+    def visualize_moving(self):
+        self.moving_points.paint_uniform_color([1, 0, 0])
+        o3d.visualization.draw_geometries([self.moving_points])
+
+    def visualize_static(self):
+        self.static_points.paint_uniform_color([0, 1, 0])
+        o3d.visualization.draw_geometries([self.static_points])
+
+    def visualize(self, pcd):
+
+        o3d.visualization.draw_geometries([pcd])
+
 
 if __name__ == "__main__":
     process = Lidar_Processing()
     aggregated_cloud, color = process.cloud_aggregation()
     process.visualize_pointcloud()
-    process.visulized_clored_pointcloud()
     static_points, moving_points = process.detect_moving_objects()
-    process.visualize_filtred_pointcloud()
+    process.visualize(static_points)
+    # process.visualize_filtred_pointcloud()
+    # process.visualize_moving()
+    # process.visualize_static()
